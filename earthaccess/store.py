@@ -132,6 +132,7 @@ class Store(object):
                 # collect cookies from other DAACs
                 for url in DAAC_TEST_URLS:
                     self.set_requests_session(url)
+            self.session = self.auth.get_session()
 
         else:
             logger.warning("The current session is not authenticated with NASA")
@@ -528,7 +529,7 @@ class Store(object):
             local_path = Path.cwd() / "data" / f"{today}-{uuid}"
 
         pqdm_kwargs = {
-            "n_jobs": threads,
+            "n_jobs": threads, #ZHL hardcoded
             **(pqdm_kwargs or {}),
         }
 
@@ -626,6 +627,7 @@ class Store(object):
         logger.info(
             f" Getting {len(granules)} granules, approx download size: {total_size} GB"
         )
+        print("ZHL debug")
         if access == "direct":
             if endpoint is not None:
                 logger.info(
@@ -662,6 +664,90 @@ class Store(object):
         Returns:
             A local filepath or an exception.
         """
+
+        def truncate_value(key, value):
+            """Truncate header value if necessary."""
+            if len(value) > 80:
+                #return f"{value[:20]}.......{value[-60:]}"
+                return f"{value}"
+            return value
+        def log_redirects(response, *args, **kwargs):
+            print(f"\nRedirect Info:")
+            print(f"Status Code: {response.status_code}")
+            print(f"URL: {response.url}")
+            print("Request Headers:")
+            for key, value in response.request.headers.items():
+                if key.lower() == "authorization" and value.startswith("Bearer "):
+                    print(f"  {key}: {truncate_value(key, value)}")
+                else:
+                    print(f"  {key}: {value}")
+            print("Response Headers:")
+            for key, value in response.headers.items():
+                if key.lower() == "set-cookie":
+                    print(f"  {key}: {truncate_value(key, value)}")
+                else:
+                    print(f"  {key}: {value}")
+
+            # Parse and display cookies in detail
+            if response.cookies:
+                print("Cookies:")
+                cookie_dict = {}
+                for cookie in response.cookies:
+                    print(cookie)
+                    '''
+                    domain = cookie.domain or "unknown"
+                    path = cookie.path or "/"
+                    cookie_dict.setdefault(domain, {}).setdefault(path, {})[cookie.name] = {
+                        "version": cookie.version,
+                        "name": cookie.name,
+                        "value": truncate_value(cookie.value),
+                        "port": cookie.port,
+                        "port_specified": cookie.port_specified,
+                        "domain": cookie.domain,
+                        "domain_specified": cookie.domain_specified,
+                        "domain_initial_dot": cookie.domain_initial_dot,
+                        "path": cookie.path,
+                        "path_specified": cookie.path_specified,
+                        "secure": cookie.secure,
+                        "expires": cookie.expires,
+                        "discard": cookie.discard,
+                        "comment": cookie.comment,
+                        "comment_url": cookie.comment_url,
+                        "rest": cookie._rest,
+                        "rfc2109": cookie.rfc2109,
+                    }
+                    '''
+
+            print("-" * 50 + '\n'*3)
+        '''
+        def log_redirects(response, *args, **kwargs):
+            print(f"\nRedirect Info:")
+            print(f"Status Code: {response.status_code}")
+            print(f"URL: {response.url}")
+            print("Request Headers:")
+            for key, value in response.request.headers.items():
+                print(f"  {key}: {value}")
+            print("Response Headers:")
+            for key, value in response.headers.items():
+                print(f"  {key}: {value}")
+            print("-" * 50)
+        '''
+        import socket
+        # Function to get local outgoing IP address
+        def get_local_ip():
+            # Use a dummy connection to determine the local IP address
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))  # Connect to a public IP address
+            local_ip_address = s.getsockname()[0]
+            s.close()
+            return local_ip_address
+
+        # Function to get IP address from hostname
+        def get_ip_from_hostname(hostname):
+            ip_address = socket.gethostbyname(hostname)
+            return ip_address
+
+        print("ZHL url from _download_file: ", url)
         # If the get data link is an Opendap location
         if "opendap" in url and url.endswith(".html"):
             url = url.replace(".html", "")
@@ -669,12 +755,47 @@ class Store(object):
         path = directory / Path(local_filename)
         if not path.exists():
             try:
-                session = self.auth.get_session()
+                #session = self.auth.get_session()
+                session = self.session
+                print("\n"*10+"="*50)
+                #session.hooks['response'] = [log_redirects]
+                print("ZHL session in _download_file: ",session)
                 with session.get(
                     url,
                     stream=True,
                     allow_redirects=True,
                 ) as r:
+                    #print("ZHL session cookies: ",session.cookies)
+                    print("ZHL r: ",r)
+                    import json
+                    if r.history:
+                        print("Redirect chain:")
+                        for i, resp in enumerate(r.history):
+                            print("\nURL"+'='*100+'\n', resp.url)
+                            print("Response Code:", resp.status_code)  # Print the response code for each redirect
+                            print("Request Headers:", json.dumps(dict(resp.request.headers), indent=4))
+                            if resp.request.body:
+                                print("Request Body:", resp.request.body.decode('utf-8'))
+                            print("Response Headers:", json.dumps(dict(resp.headers), indent=4))
+                            print("Response Cookies:", resp.cookies)
+                            print()  # Separate each redirect information
+
+                            # Get local outgoing IP address for each request
+                            local_ip_address = get_local_ip()
+                            print("Local outgoing IP address:", local_ip_address)
+
+                            # Get IP address of the target hostname for each request
+                            hostname = resp.url.split('//')[1].split('/')[0]
+                            ip_address = get_ip_from_hostname(hostname)
+                            print("IP address of", hostname, ":", ip_address)
+
+                        # Print final URL info
+                        print("\n\nFinal URL"+'='*100+'\n', r.url)
+                        print("Final URL Request Headers:", json.dumps(dict(r.request.headers), indent=4))
+                        if r.request.body:
+                            print("Final URL Request Body:", r.request.body.decode('utf-8'))
+                        print("Final URL Response Headers:", json.dumps(dict(r.headers), indent=4))
+                        print("Final URL Response Body Length:", len(r.content))
                     r.raise_for_status()
                     with open(path, "wb") as f:
                         # This is to cap memory usage for large files at 1MB per write to disk per thread
